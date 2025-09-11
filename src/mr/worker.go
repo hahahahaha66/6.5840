@@ -3,7 +3,7 @@ package mr
 import (
 	"fmt"
 	"hash/fnv"
-	"log"
+	// "log"
 	"net/rpc"
 	"os"
 	"sort"
@@ -52,26 +52,51 @@ func readFile(filename string) (string, error) {
 	return string(content), err
 }
 
+func SendHeartPacket(workerid int) {
+	var heartpacket HeartPacket
+	var heartpacketreply HeartPacketreply
+	heartpacket.WorkerId = workerid
+
+	for {
+		time.Sleep(1 * time.Second)
+		ok := call("Coordinator.SendHeartbeat", &heartpacket, &heartpacketreply)
+		if !ok {
+			fmt.Printf("call failed, Coordinator.SendHeartbeat!\n")
+		} 
+	}
+}
+
+func openAndTruncateOrAppend(filename string) (*os.File, error) {
+    // 如果文件存在，truncate（清空）再写；否则创建并写（不追加）
+    if _, err := os.Stat(filename); err == nil {
+        // 文件存在 -> 清空重新写
+        return os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+    } else if os.IsNotExist(err) {
+        // 文件不存在 -> 创建并写（不使用 append，reduce/mapping 输出应当写入新的文件）
+        return os.OpenFile(filename, os.O_CREATE|os.O_WRONLY, 0644)
+    } else {
+        return nil, err
+    }
+}
+
+
 //
 // main/mrworker.go calls this function.
 //
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-
-	
 	rand.Seed(time.Now().UnixNano()) // 设置随机种子
 	workerID := rand.Intn(900000) + 100000 
+	go SendHeartPacket(workerID)
+
 	for {
 		request := TaskRequest{}
 		reply := TaskReply{}
 		request.Workerid = workerID
 		ok := call("Coordinator.AskForWork", &request, &reply)
-		fmt.Println(reply)
-		if ok {
-			// reply.Y should be 100.
-			fmt.Printf("reply.Y %d\n", reply.Taskid)
-		} else {
-			fmt.Printf("call failed!\n")
+		if !ok {
+			fmt.Printf("call failed, Coordinator.AskForWork!\n")
+			return
 		}
 
 		if reply.Tasktype == "map" {
@@ -87,14 +112,13 @@ func Worker(mapf func(string, string) []KeyValue,
 			intermediate := mapf(filename, content)
 			sort.Sort(ByKey(intermediate))
 			files := make(map[string]*os.File)
-			for i := 0; i < reducenum ;i++ {
+			for i := 0; i < reducenum; i++ {
 				oname := "mr-" + strconv.Itoa(taskid) + "-" + strconv.Itoa(i)
-				files[oname], err = os.OpenFile(oname, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+				files[oname], err = openAndTruncateOrAppend(oname)
 				if err != nil {
 					fmt.Printf("打开文件失败: %v\n", err)
 					return
 				}
-				defer files[oname].Close()
 			}
 			for _, kv := range intermediate {
 				oname := "mr-" + strconv.Itoa(taskid) + "-" + strconv.Itoa(ihash(kv.Key) % reducenum)
@@ -106,20 +130,25 @@ func Worker(mapf func(string, string) []KeyValue,
 					return
 				}
 			}
+
+			for _, f := range files {
+				f.Close()
+			}
+
 			report := ReportTask{}
 			reportreply := ReportTaskReply{}
+			report.WorkerId = workerID
 			report.Taskid = taskid
 			report.Tasktype = "map"
 			ok := call("Coordinator.ReplyForWork", &report, &reportreply)
 			if ok {
 			} else {
-				fmt.Printf("call failed!\n")
+				fmt.Printf("call failed, map, Coordinator.ReplyForWork!\n")
 			}
 		} else if reply.Tasktype == "reduce" {
 			taskid := reply.Taskid
 			mapnum := reply.Mapnum
 			var err error
-
 			files := make(map[string]*os.File)
 			for i := 0; i < mapnum ;i++ {
 				oname := "mr-" + strconv.Itoa(i) + "-" + strconv.Itoa(taskid)
@@ -132,7 +161,7 @@ func Worker(mapf func(string, string) []KeyValue,
 			}
 
 			outputfilename := "mr-out-" + strconv.Itoa(taskid)
-			outputfile, err := os.OpenFile(outputfilename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			outputfile, err := openAndTruncateOrAppend(outputfilename)
 			if err != nil {
 				fmt.Printf("Error reading file %s: %v\n", outputfilename, err)
 				return
@@ -157,7 +186,7 @@ func Worker(mapf func(string, string) []KeyValue,
 					panic(err)
 				}
 			}
-
+			sort.Sort(ByKey(kvs))
 			i := 0
 			for i < len(kvs) {
 				j := i + 1
@@ -177,16 +206,20 @@ func Worker(mapf func(string, string) []KeyValue,
 
 			report := ReportTask{}
 			reportreply := ReportTaskReply{}
+			report.WorkerId = workerID
 			report.Taskid = taskid
 			report.Tasktype = "reduce"
 			ok := call("Coordinator.ReplyForWork", &report, &reportreply)
 			if ok {
 			} else {
-				fmt.Printf("call failed!\n")
+				fmt.Printf("call failed!, reduce, Coordinator.ReplyForWork\n")
 			}
 		} else if reply.Tasktype == "None" {
-			fmt.Println("Mission Completed\n")
-			return
+			fmt.Println("Mission Completed")
+			return 
+		} else if reply.Tasktype == "Waiting" {
+			time.Sleep(2 * time.Second)
+			continue
 		} else {
 			fmt.Printf("Woring Tasktype!!!\n")
 			return
@@ -234,7 +267,8 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 	sockname := coordinatorSock()
 	c, err := rpc.DialHTTP("unix", sockname)
 	if err != nil {
-		log.Fatal("dialing:", err)
+		return false
+		// log.Fatal("dialing:", err)
 	}
 	defer c.Close()
 

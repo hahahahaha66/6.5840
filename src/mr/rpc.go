@@ -37,12 +37,21 @@ type TaskReply struct {
 }
 
 type ReportTask struct {
+	WorkerId int
 	Tasktype string
 	Taskid int
 }
 
 type ReportTaskReply struct {
 
+}
+
+type HeartPacket struct {
+	WorkerId int
+}
+
+type HeartPacketreply struct {
+	
 }
 
 
@@ -57,3 +66,4 @@ func coordinatorSock() string {
 	s += strconv.Itoa(os.Getuid())
 	return s
 }
+
