@@ -1,6 +1,8 @@
 package lock
 
 import (
+	"time"
+
 	"6.5840/kvtest1"
 )
 
@@ -10,6 +12,8 @@ type Lock struct {
 	// Put and Get.  The tester passes the clerk in when calling
 	// MakeLock().
 	ck kvtest.IKVClerk
+	name string
+	mark string
 	// You may add code here
 }
 
@@ -19,15 +23,34 @@ type Lock struct {
 // Use l as the key to store the "lock state" (you would have to decide
 // precisely what the lock state is).
 func MakeLock(ck kvtest.IKVClerk, l string) *Lock {
-	lk := &Lock{ck: ck}
+	lk := &Lock{ck: ck, name: l}
 	// You may add code here
 	return lk
 }
 
 func (lk *Lock) Acquire() {
-	// Your code here
+	key := "lock-" + lk.name
+	for {
+		values, version, _ := lk.ck.Get(key)
+		if values != "" {
+			time.Sleep(100)
+		} else {
+			lk.mark = kvtest.RandValue(8)
+			err := lk.ck.Put(key, lk.mark, version)
+			if err == "OK" {
+				break
+			} 
+		}
+	}
 }
 
 func (lk *Lock) Release() {
-	// Your code here
+	key := "lock-" + lk.name
+	values, version, _ := lk.ck.Get(key)
+	for values == lk.mark {
+		err := lk.ck.Put(key, "", version)
+		if err == "OK" {
+			break
+		}
+	}
 }
