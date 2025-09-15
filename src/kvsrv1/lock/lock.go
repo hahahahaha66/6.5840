@@ -39,7 +39,14 @@ func (lk *Lock) Acquire() {
 			err := lk.ck.Put(key, lk.mark, version)
 			if err == "OK" {
 				break
-			} 
+			} else if err == "ErrMaybe" {
+				evalues, _, _ := lk.ck.Get(key)
+				if lk.mark == evalues {
+					break
+				} else {
+					continue
+				}
+			}
 		}
 	}
 }
@@ -51,6 +58,13 @@ func (lk *Lock) Release() {
 		err := lk.ck.Put(key, "", version)
 		if err == "OK" {
 			break
+		} else if err == "ErrMaybe" {
+			evalues, _, _ := lk.ck.Get(key)
+			if evalues == "" {
+				break
+			} else {
+				continue
+			}
 		}
 	}
 }
